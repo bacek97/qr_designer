@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Генератор QR-кода + Редактирование модулей + Валидность</title>
+  <style>
+
+  </style>
+
+  <script type="module">
+    // import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.3/+esm";
+    // import UPNG from "https://cdn.jsdelivr.net/npm/upng-js@2.1.0/+esm";
+    // import jsQR from "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js/+esm";
+
+  import encodeQR from 'https://esm.sh/@paulmillr/qr@0.3.0';
+  import decodeQR from 'https://esm.sh/@paulmillr/qr@0.3.0/decode.js';
+  import { Bitmap } from 'https://esm.sh/@paulmillr/qr@0.3.0';
+
+  // const bmBits = encodeQR('Hello world', 'raw', { scale: 1, ecc: 'low' });
+  // const bm = new Bitmap({ width: bmBits[0].length, height: bmBits.length });
+  // bm.data = bmBits;
+  // console.log(bm.toImage());
+
+
+  function buildQRSVG(rawBits) {
+    const n = rawBits.length;
+    // const svg = document.createElementNS(xmlns, 'svg');
+    const svg = document.querySelector('#render');
+    const xmlns = svg.getAttribute('xmlns:svg');
+    const g = document.createElementNS(xmlns, 'g');
+    g.setAttribute('id', 'render-group');
+
+    // const colors=[...document.querySelectorAll('#colors rect')].map(r => `#${r.id}`);
+    const colors=[window.ruleB.fill, window.ruleF.fill];
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const g2 = document.createElementNS(xmlns, 'g');
+        g2.setAttribute('class', rawBits[y][x] ? 'f' : 'b');
+        const use = document.createElementNS(xmlns, 'use');
+        use.setAttribute('href', '#TRBL');
+        use.setAttribute('x', x);
+        use.setAttribute('y', y);
+        use.setAttribute('fill', rawBits[y][x] ? colors[1] : colors[0]);
+        use.addEventListener('click', () => onclk(use)); 
+        g2.appendChild(use);
+        g.appendChild(g2);
+      }
+    }
+    // g.innerHTML = buf;
+    document.querySelector('#render-group').replaceWith(g);
+    svg.setAttribute('viewBox', `0 0 ${n} ${n}`);
+
+    return svg;
+  }
+
+  function getRotatedViewBox(size, angleDeg) {
+    const s = size;
+    const diag = Math.ceil(s * Math.sqrt(2)); // 30
+    const halfDaiag= diag / 2;     // 15
+    const table = [
+      [0, 0],               // 0°   → 0 0 21 21
+      [-halfDaiag, 0],      // 45°  → -15 0 30 30
+      [-s, 0],              // 90°  → -21 0 21 21
+      [-diag, -halfDaiag],  // 135° → -30 -15 30 30
+      [-s, -s],             // 180° → -21 -21 21 21
+      [-halfDaiag, -diag],  // 225° → -15 -30 30 30
+      [0, -s],              // 270° → 0 -21 21 21
+      [0, -halfDaiag]       // 315° → 0 -15 30 30
+    ];
+    // const a = ((angleDeg % 360) + 360) % 360;
+    const k = Math.floor(angleDeg / 45) % 8;
+    const [vx, vy] = table[k];
+    const boxSize = (k % 2 === 0) ? s : diag;
+    return `${Math.floor(vx)} ${Math.floor(vy)} ${boxSize} ${boxSize}`;
+  }
+
+  function regen() {
+    // const opts = { scale: 1, ecc: 'high' };
+    // const rawBits = encodeQR('mailto:ivan@example.com?subject=Hi&body=Hello', 'raw', opts);
+    const rawBits = encodeQR(text.value, 'raw', { scale: 1, border: 0, ecc: ecc.value });
+    let sssvg = buildQRSVG(rawBits)
+  }
+
+  window.regen = regen;
+
+  function rotate(deg) {
+    document.querySelector('#render-group')
+    .style.transition = 'transform 0.5s linear';
+    document.querySelector('#render-group')
+    .style.transform = `rotate(${deg}deg)`;
+
+    const svg = document.querySelector('#render');
+    // svg.setAttribute('viewBox', getRotatedViewBox(21, deg));
+    const [x, y, w, h] = getRotatedViewBox(21, deg).split(' ');
+    // console.log({ x: 50, y: 50, w: 100, h: 100 });
+
+    animateViewBox(svg, { x, y, w, h }, 500);
+  }
+
+  window.rotate = rotate;
+
+
+  function animateViewBox(svg, to, duration = 500) {
+    function getViewBox(svg) {
+      const vb = svg.getAttribute('viewBox').trim().split(/\s+/).map(Number);
+      return { x: vb[0], y: vb[1], w: vb[2], h: vb[3] };
+    }
+    const from = getViewBox(svg);
+    const start = performance.now();
+    function frame(t) {
+      const k = Math.min((t - start) / duration, 1);
+      const x = from.x + (to.x - from.x) * k;
+      const y = from.y + (to.y - from.y) * k;
+      const w = from.w + (to.w - from.w) * k;
+      const h = from.h + (to.h - from.h) * k;
+      svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`);
+      if (k < 1) requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+/**
+ * @param {[number, number, number, number?]} color1 RGBA
+ * @param {[number, number, number, number?]} color2 RGBA
+ * @returns {number} Контраст по формуле WCAG
+ */
+function contrastRatio(color1, color2) {
+    function getLightness(rgba) {
+        const [r, g, b] = rgba.match(/\d+/g).map(Number);
+        return Math.max(r,g,b) /255;
+        // console.log([r, g, b])
+        // const max = Math.max(r, g, b) / 255;
+        // const min = Math.min(r, g, b) / 255;
+        // console.log([max, min])
+        // return (max + min) / 2;  // HSL Lightness
+    }
+
+    let l1 = getLightness(color1);
+    let l2 = getLightness(color2);
+
+    // Определяем, какой светлее
+    let L_light = Math.max(l1, l2);
+
+    let L_dark  = Math.min(l1, l2);
+
+    // if (window.light_const === undefined || window.dark_const === undefined) {
+    //   window.light_const = L_light;
+    //   window.dark_const = L_dark;
+    // } else {
+
+    //     L_light = Math.min(L_light, window.light_const);
+    //     L_dark  = Math.max(L_dark, window.dark_const);
+    // }
+
+    // WCAG-формула → X:1
+    const ratio = (L_light + 0.05) / (L_dark + 0.05);
+
+    const rounded = Math.round(ratio * 10) / 10;
+    let r = rounded.toFixed(1).replace(/\.0$/, '');
+    let txt = (l1 > l2) ? '1:'+r : r+':1';
+    contrast.innerHTML = txt;
+    if (+r < 3) {
+      contrast.setAttribute('fill', 'red');
+    } else if (+r < 5) {
+      contrast.setAttribute('fill', 'orange');
+    } else {
+      contrast.setAttribute('fill', 'black');
+    }
+    return  txt;
+}
+  window.contrastRatio = contrastRatio;
+
+  </script>
+</head>
+<body>
+  <h1>URL Generator & QR Designer</h1>
+       <input id="text" onchange="regen()" value="asd" placeholder="geo:40.71872,-73.98905,100" />
+       <select>
+        <option>WhatsApp</option>
+        <option>Telegram</option>
+        <option>SMS</option>
+        <option>Телефон</option>
+        <option>E-Mail</option>
+        <option>Гео-координаты</option>
+        <option>Текст</option>
+       </select>
+       <label>Телефон <input placeholder="+71234567890" /></label>
+       <label>Тема письма <input disabled placeholder="" /></label>
+       <label>Текст сообщения <textarea></textarea></label>
+       <label>Гео-координаты <input placeholder="127.534611,50.257456" /></label>
+
+         <select id="ecc" onchange="regen()">
+          <option value="low">Избыточность 7%</option>
+          <option value="medium">Избыточность 15%</option>
+          <option value="quartile">Избыточность 25%</option>
+          <option value="high">Избыточность 30%</option>
+         </select>
+       <div>
+         <select onchange="rotate(this.value)">
+          <option value="0">Поворот 0°</option>
+          <option value="45">Поворот 45°</option>
+          <option value="90">Поворот 90°</option>
+          <option value="135">Поворот 135°</option>
+          <option value="180">Поворот 180°</option>
+          <option value="225">Поворот 225°</option>
+          <option value="270">Поворот 270°</option>
+          <option value="315">Поворот 315°</option>
+         </select>
+         <label>Ширина <input type="range" /></label>
+         <label>Высота <input type="range" /></label>
+         <span>Валидный QR</span>
+         <svg id="render" xmlns:svg="http://www.w3.org/2000/svg" shape-rendering="crispEdges" preserveAspectRatio="none" style="width: 400px; height: 400px; cursor: url(https://jspaint.app/images/cursors/fill-bucket.png) 5 18, pointer;">
+           <defs>
+            <style>
+              #render-group use:hover { stroke: gray; stroke-width: 0.01rem; }
+            </style>
+            <script>
+              function onclk(el) {
+                const activeBrush = document.querySelector('.active-brush');
+                const nodes = Array.from(activeBrush.children).map(el => el.cloneNode(false));
+                // nodes[0].removeAttribute('class');
+                // nodes[1].removeAttribute('class');
+                console.log(nodes[0].className) // SVGAnimatedString {baseVal: 'back', animVal: 'back'}
+
+                const g = el.parentNode;
+                const colors = [
+                '#' + ruleB.fill.match(/\d+/g).map(x => (+x).toString(16).padStart(2,0)).join(''),
+                '#' + ruleF.fill.match(/\d+/g).map(x => (+x).toString(16).padStart(2,0)).join('')
+                ]
+                const svg = document.querySelector('#render');
+                const xmlns = svg.getAttribute('xmlns:svg');
+                  // console.log(nodes)
+                nodes.forEach((use)=> {
+                  // if (use) 
+                  {
+                  use.setAttribute('x', el.getAttribute('x'));
+                  use.setAttribute('y', el.getAttribute('y'));
+                  use.setAttribute('fill', use.classList.contains('front') ? colors[1] : colors[0]);
+                  use.removeAttribute('class');
+                  use.addEventListener('click', () => onclk(use)); 
+                  }
+                });
+                // use1.setAttribute('href', '#TRBL');
+                g.replaceChildren(...nodes);
+                // const colors=[...document.querySelector('#colors').children].map(r => `#${r.id}`);
+                // const i=colors.indexOf(el.getAttribute('href'));
+                // el.setAttribute('href', colors[(i+1)%colors.length]);
+              }
+            </script>
+            <g>
+              <rect id="цвет фона"  width="1" height="1" />
+              <rect id="TRBL" width="1" height="1" />
+              <circle id="____" r="0.45" cx="0.5" cy="0.5" />
+              <path id="__BL" d="M0 1 L0 0 A1 1 0 0 1 1 1 Z" />
+              <path id="T__L" d="M0 0 L1 0 A1 1 0 0 1 0 1 Z" />
+              <path id="TR__" d="M1 0 L1 1 A1 1 0 0 1 0 0 Z" />
+              <path id="_RB_" d="M1 1 L0 1 A1 1 0 0 1 1 0 Z" />
+              <path id="__B_" d="M1 1 0 1 0 0.5 A0.5 0.5 0 1 1 1 0.5 Z" />
+              <path id="___L" d="M0 1 L0 0 0.5 0 A0.5 0.5 0 1 1 0.5 1 Z" />
+              <path id="T___" d="M0 0 L1 0 1 0.5 A0.5 0.5 0 0 1 0 0.5 Z" />
+              <path id="_R__" d="M1 0 1 1 0.5 1 A0.5 0.5 0 1 1 0.5 0 Z" />
+            </g>
+           </defs>
+           <g id="render-group" fill="red">
+           </g>
+         </svg>
+
+         <svg xmlns:svg="http://www.w3.org/2000/svg" shape-rendering="crispEdges" viewBox="0 0 2 20"  style="width: 400px; height: 400px; ">
+           <defs>
+            <style id="styleFront">
+              .front { fill: #222; }
+            </style>
+            <style id="styleBack">
+              .back { fill: #DDD; }
+            </style>
+            <style>
+              /*svg { stroke: gray; stroke-width: 0.1rem; }*/
+              /*.front { fill: #222; }*/
+              #tools use { stroke: gray; stroke-width: 0.001rem; }
+              #tools g:hover > use:not(.front) { stroke: gray; stroke-width: 0.01rem; }
+              #tools g.active-brush > use:not(.front) { stroke: gray; stroke-width: 0.01rem; }
+              #tools g:nth-child(odd)  { --col-x: 0px; }
+              #tools g:nth-child(even) { --col-x: 1px; }
+            </style>
+            <script>
+              window.ruleF = styleFront.sheet.cssRules[0].style;
+              window.ruleB = styleBack.sheet.cssRules[0].style;
+
+              function activateBrush(newBrush) {
+                let oldBrush = document.querySelector('.active-brush');
+                oldBrush.classList.remove('active-brush');
+                newBrush.classList.add('active-brush');
+              }
+              window.addEventListener('DOMContentLoaded', () => {
+                document.getElementById('colorFront').value = '#' + ruleF.fill.match(/\d+/g).map(x => (+x).toString(16).padStart(2,0)).join('');
+                document.getElementById('colorBack').value  = '#' + ruleB.fill.match(/\d+/g).map(x => (+x).toString(16).padStart(2,0)).join('');
+                regen();
+              });
+
+              function inverse_colors() {
+                let tmp = ruleF.fill;
+                ruleF.fill = ruleB.fill;
+                ruleB.fill = tmp;
+                contrastRatio(ruleF.fill, ruleB.fill);
+              }
+            </script>
+              <pattern id="checker" width="1" height="1" patternUnits="userSpaceOnUse">
+                <rect width="1" height="1" fill="#fff"/>
+                <rect width="0.5" height="0.5" fill="#ccc"/>
+                <rect x="0.5" y="0.5" width="0.5" height="0.5" fill="#ccc"/>
+              </pattern>
+              <rect id="rect-checker" fill="url(#checker)" width="1" height="2" />
+           </defs>
+           <g id="tools">
+            <g class="brushs">
+              <g style="transform: translate(var(--col-x), 0px);" onclick="activateBrush(this)" class="active-brush">
+                <use href="#TRBL" class="back" />
+              </g>
+              <g style="transform: translate(var(--col-x), 0px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+                <use href="#____" class="front" />
+              </g>
+              <g style="transform: translate(var(--col-x), 1px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+                <use href="#_RB_" class="front"/>
+              </g>
+              <g style="transform: translate(var(--col-x), 1px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+                <use href="#__BL" class="front"/>
+              </g>
+              <g style="transform: translate(var(--col-x), 2px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+                <use href="#TR__" class="front"/>
+              </g>
+              <g style="transform: translate(var(--col-x), 2px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+                <use href="#T__L" class="front"/>
+              </g>
+
+              <g style="transform: translate(var(--col-x), 3px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+                <use href="#T___" class="front"/>
+              </g>
+
+              <g style="transform: translate(var(--col-x), 3px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+                <use href="#_R__" class="front"/>
+              </g>
+
+              <g style="transform: translate(var(--col-x), 4px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+                <use href="#___L" class="front"/>
+              </g>
+              <g style="transform: translate(var(--col-x), 4px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+                <use href="#__B_" class="front"/>
+              </g>
+              <g style="transform: translate(var(--col-x), 5px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+              </g>
+              <g style="transform: translate(var(--col-x), 5px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+              </g>
+              <g style="transform: translate(var(--col-x), 6px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+              </g>
+              <g style="transform: translate(var(--col-x), 6px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+              </g>
+<!--               <g style="transform: translate(var(--col-x), 6px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="front" />
+                <use href="#____" fill="#555" class="back" />
+              </g>
+              <g style="transform: translate(var(--col-x), 6px);" onclick="activateBrush(this)">
+                <use href="#TRBL" class="back" />
+                <use href="#____" fill="#555" class="front" />
+              </g> -->
+            </g>
+            <text id="contrast" x="50%" y="8.6" dominant-baseline="middle" text-anchor="middle" font-size="0.8px" onclick="inverse_colors()">5:1</text>
+            <g>
+
+              <g style="transform: translate(var(--col-x), 9px);">
+                <use href="#rect-checker" onclick="ruleB.fill='#0000'"  />
+              </g>
+              <g style="transform: translate(var(--col-x), 9px);">
+                <use href="#rect-checker" onclick="ruleF.fill='#0000'"  />
+              </g>
+              <g style="transform: translate(var(--col-x), 9px);">
+                <use href="#TRBL" class="back" onclick="colorBack.click()"  />
+              </g>
+              <g style="transform: translate(var(--col-x), 9px);">
+                <use href="#TRBL" class="front" onclick="colorFront.click()" />
+              </g>
+              <g>
+                  <foreignObject >
+                      <input id="colorFront" type="color" xmlns="http://www.w3.org/1999/xhtml" oninput="ruleF.fill=event.target.value" onchange="contrastRatio(ruleF.fill, ruleB.fill)">
+                      <input id="colorBack"  type="color" xmlns="http://www.w3.org/1999/xhtml" oninput="ruleB.fill=event.target.value" onchange="contrastRatio(ruleF.fill, ruleB.fill)">
+                  </foreignObject>
+              </g>
+            </g>
+           </g>
+         </svg>
+       </div>
+
+
+
+
+<!--  <input id="tgLink" value="https://t.me/+" placeholder="0123456789"
+       oninput="this.value='https://t.me/+'+this.value.slice(14)"> -->
+</body>
+</html>
